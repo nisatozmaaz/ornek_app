@@ -34,17 +34,17 @@ class _AuthPageState extends State<AuthPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("Giriş / Kayıt"),
-      ),
+      appBar: AppBar(title: const Text("Giriş / Kayıt")),
       body: Column(
         children: [
           Container(
             color: Colors.white,
             child: TabBar(
               controller: _tab,
-              labelStyle:
-                  const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              labelStyle: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
               labelColor: Colors.teal,
               unselectedLabelColor: Colors.grey,
               indicatorColor: Colors.teal,
@@ -184,23 +184,24 @@ class _RegisterForm extends StatelessWidget {
                   controller: pass,
                   obscureText: true,
                   decoration: const InputDecoration(
-                      labelText: 'Şifre (min 6 karakter)'),
+                    labelText: 'Şifre (min 6 karakter)',
+                  ),
                 ),
                 const SizedBox(height: 20),
                 ElevatedButton(
                   onPressed: () async {
                     try {
-                      await FirebaseAuth.instance.createUserWithEmailAndPassword(
-                        email: email.text.trim(),
-                        password: pass.text,
-                      );
+                      await FirebaseAuth.instance
+                          .createUserWithEmailAndPassword(
+                            email: email.text.trim(),
+                            password: pass.text,
+                          );
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Kayıt başarılı!')),
                       );
                     } on FirebaseAuthException catch (e) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                            content: Text(e.message ?? 'Kayıt başarısız')),
+                        SnackBar(content: Text(e.message ?? 'Kayıt başarısız')),
                       );
                     }
                   },

@@ -1,3 +1,4 @@
+// features/home/product_list_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,16 +8,23 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:ornek_app/notify.dart';
+import '../recipes/recipe_page.dart';
+import 'package:onesignal_flutter/onesignal_flutter.dart';
 
 class ProductListPage extends StatelessWidget {
   const ProductListPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      OneSignal.login(user.uid);
+      debugPrint('✅ OneSignal.login(${user.uid})');
+    }
     final itemsRef = FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(user!.uid)
         .collection('items');
 
     return Scaffold(
@@ -34,6 +42,7 @@ class ProductListPage extends StatelessWidget {
           },
         ),
       ),
+
       backgroundColor: Colors.grey[100],
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: itemsRef.orderBy('expiry', descending: false).snapshots(),
@@ -53,7 +62,7 @@ class ProductListPage extends StatelessWidget {
 
           final today = DateTime.now();
 
-          // SlidableAutoCloseBehavior,liste içindeki Slidable’lar için otomatik kapatma davranışı sağlar birini açınca diğeri kapanır
+          // SlidableAutoCloseBehavior: bir slidable açılınca diğerini kapatır
           return SlidableAutoCloseBehavior(
             child: ListView.separated(
               itemCount: docs.length,
@@ -174,6 +183,29 @@ class ProductListPage extends StatelessWidget {
                       subtitle: expiry != null
                           ? RichText(text: textSpan)
                           : null,
+                      // ÜRÜNE TIKLAYINCA tarif sayfasına git
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                RecipePage(productName: name, expiry: expiry),
+                          ),
+                        );
+                      },
+
+                      // Sağ tarafa “Tarifler” butonu
+                      trailing: TextButton.icon(
+                        icon: const Icon(Icons.restaurant_menu),
+                        label: const Text('Tarifler'),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  RecipePage(productName: name, expiry: expiry),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
                 );
@@ -210,7 +242,7 @@ class ProductListPage extends StatelessWidget {
         child: AnimatedPadding(
           duration: const Duration(milliseconds: 300),
           padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom, //responsive tasaerım
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
           ),
           child: DraggableScrollableSheet(
             initialChildSize: 0.5,
@@ -238,11 +270,73 @@ class ProductListPage extends StatelessWidget {
                   child: _AddProductForm(
                     onSave: (name, expiry) async {
                       try {
+                        final exp = expiry!; // null değil; formda zorunlu
                         await itemsRef.add({
                           'name': name,
-                          'expiry': Timestamp.fromDate(expiry!),
+                          'expiry': Timestamp.fromDate(exp),
                           'createdAt': FieldValue.serverTimestamp(),
                         });
+
+                        // 🔔 OneSignal bildirimleri
+                        final uid = FirebaseAuth.instance.currentUser!.uid;
+                        final now = DateTime.now();
+                        final today = DateTime(
+                          now.year,
+                          now.month,
+                          now.day,
+                          0,
+                          0,
+                          0,
+                        );
+                        final expDay = DateTime(
+                          exp.year,
+                          exp.month,
+                          exp.day,
+                          0,
+                          0,
+                          0,
+                        );
+                        final daysLeft = expDay.difference(today).inDays;
+
+                        debugPrint(
+                          '📅 Ürün: $name, SKT: ${_fmt(exp)}, Kalan gün: $daysLeft',
+                        );
+
+                        if (daysLeft >= 0 && daysLeft <= 3) {
+                          // 3 gün veya daha az - anında bildir
+                          await sendOneSignalNow(
+                            externalId: uid,
+                            titleTR: 'Hatırlatma',
+                            bodyTR:
+                                '"$name" için SKT\'ye $daysLeft gün kaldı. SKT: ${_fmt(exp)}',
+                          );
+                        } else if (daysLeft > 3) {
+                          // 3+ gün sonra - planlı bildirim
+                          final when3 = expDay.subtract(
+                            const Duration(days: 3),
+                          );
+                          await scheduleOneSignal(
+                            externalId: uid,
+                            titleTR: 'Hatırlatma',
+                            bodyTR:
+                                '"$name" için SKT\'ye 3 gün kaldı. SKT: ${_fmt(exp)}',
+                            sendTimeLocal: when3,
+                          );
+                        }
+                        // (Opsiyonel) SKT - 1 gün için ikinci plan
+                        final d1 = exp.subtract(const Duration(days: 1));
+                        if (d1.isAfter(now)) {
+                          await scheduleOneSignal(
+                            externalId: uid,
+                            titleTR: 'Son hatırlatma',
+                            bodyTR: '"$name" için SKT yarın! SKT: ${_fmt(exp)}',
+                            sendTimeLocal: d1,
+                          );
+                        }
+
+                        // UI kapat & bilgi ver
+                        // (plan/now çağrıları bitti; sheet'i sonra kapatıyoruz)
+                        // İstersen önce kapatıp sonra gönderebilirsin—fark etmez.
                         Navigator.of(ctx).pop();
 
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -387,6 +481,7 @@ class _AddProductFormState extends State<_AddProductForm> {
   }
 
   final ImagePicker _picker = ImagePicker(); // kameradan foto almak
+
   DateTime? _tryExtractDate(String text) {
     // 1) "SKT/TETT/EXP: 12.03.2026" tipi:
     final r1 = RegExp(
@@ -567,6 +662,7 @@ class _AddProductFormState extends State<_AddProductForm> {
       }
       return null;
     } catch (e) {
+      // ignore: avoid_print
       print('Hata: Ürün bilgisi çekilemedi. $e');
       return null;
     }
@@ -702,7 +798,6 @@ class _AddProductFormState extends State<_AddProductForm> {
                     );
                   },
                 ),
-
                 const SizedBox(height: 8),
                 if (_dateError != null)
                   Padding(
@@ -714,7 +809,6 @@ class _AddProductFormState extends State<_AddProductForm> {
                   ),
               ],
             ),
-
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
